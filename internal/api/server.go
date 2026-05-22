@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"singpanel/internal/configgen"
@@ -18,8 +20,15 @@ type Server struct {
 }
 
 func NewServer(s *store.Store) http.Handler {
+	return NewServerWithWeb(s, "")
+}
+
+func NewServerWithWeb(s *store.Store, webDir string) http.Handler {
 	server := &Server{store: s, mux: http.NewServeMux()}
 	server.routes()
+	if webDir != "" {
+		server.mux.HandleFunc("/", serveWeb(webDir))
+	}
 	return cors(server.mux)
 }
 
@@ -286,4 +295,32 @@ func cors(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+func serveWeb(webDir string) http.HandlerFunc {
+	fs := http.Dir(webDir)
+	fileServer := http.FileServer(fs)
+	return func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/") {
+			notFound(w)
+			return
+		}
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			methodNotAllowed(w)
+			return
+		}
+		cleanPath := filepath.Clean(strings.TrimPrefix(r.URL.Path, "/"))
+		if cleanPath == "." {
+			cleanPath = "index.html"
+		}
+		if cleanPath == ".." || strings.HasPrefix(cleanPath, ".."+string(os.PathSeparator)) || filepath.IsAbs(cleanPath) {
+			notFound(w)
+			return
+		}
+		if info, err := os.Stat(filepath.Join(webDir, cleanPath)); err == nil && !info.IsDir() {
+			fileServer.ServeHTTP(w, r)
+			return
+		}
+		http.ServeFile(w, r, filepath.Join(webDir, "index.html"))
+	}
 }

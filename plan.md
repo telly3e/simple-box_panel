@@ -10,6 +10,7 @@
 - V2Ray API: https://sing-box.sagernet.org/configuration/experimental/v2ray-api/
 - ACME provider: https://sing-box.sagernet.org/configuration/shared/certificate-provider/acme/
 - DNS01 challenge: https://sing-box.sagernet.org/configuration/shared/dns01_challenge/
+- Build from source / tags: https://sing-box.sagernet.org/installation/build-from-source/
 
 ## MVP Scope
 
@@ -19,6 +20,8 @@
 - 协议：AnyTLS 为主，Shadowsocks 为辅。
 - 拓扑：用户连接 Entry；协议实际跑在 Exit；端口转发仅建模，不自动配置系统服务。
 - 统计：按 V2Ray API 的用户统计模型设计，本地 MVP 使用 mock collector。
+- 部署：API 可以可选托管 `apps/web/dist`，Docker 形态为 API/Web/SQLite volume 单容器。
+- sing-box 编译：参考官方 `release/DEFAULT_BUILD_TAGS*` 和 `release/LDFLAGS`，并额外确保包含 `with_v2ray_api`。
 
 ## API
 
@@ -56,9 +59,12 @@
 - 已完成本地 MVP 骨架：Go API、Go Agent、React 管理页、SQLite 数据库、配置生成、订阅生成。
 - 已补 store/configgen/API 集成测试，覆盖用户、Entry/Exit、订阅、desired config、mock traffic 累加。
 - Agent 已支持可选 `--check-config`，用于在写入配置后执行 `sing-box check -c`；默认关闭，避免本地无 sing-box 时阻塞开发。
+- API 已支持 `--web-dir` 托管前端 build，并对 React 路由提供 `index.html` fallback。
+- 已增加 Dockerfile、`deployments/docker-compose.yml`，用于主控 VPS staging 的单容器部署。
+- 已增加 `scripts/build-sing-box.ps1`：读取 sing-box 官方默认 build tags/ldflags，再追加 `with_v2ray_api` 编译。
 
 ## Next Steps
 
-- 增加 Dockerfile 和 docker-compose，把 API/Web/SQLite volume 放到主控 VPS staging。
 - 给 Agent 增加真实 V2Ray API stats collector，并保留 mock collector 作为本地模式。
 - 前端补用户额度编辑、节点证书模式编辑、desired config 预览。
+- 增加 staging 环境变量和反代示例，例如公网域名、HTTPS、备份 SQLite volume。

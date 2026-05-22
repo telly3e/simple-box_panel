@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"singpanel/internal/configgen"
@@ -95,6 +97,42 @@ func TestSubscriptionRejectsDisabledUser(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("expected 403 for disabled user, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestServerServesWebDistWithSPAFallback(t *testing.T) {
+	s, err := store.Open(filepath.Join(t.TempDir(), "api.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+
+	webDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(webDir, "index.html"), []byte(`<div id="root">panel</div>`), 0o644); err != nil {
+		t.Fatalf("write index: %v", err)
+	}
+	if err := os.Mkdir(filepath.Join(webDir, "assets"), 0o755); err != nil {
+		t.Fatalf("make assets dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(webDir, "assets", "app.js"), []byte(`console.log("ok")`), 0o644); err != nil {
+		t.Fatalf("write asset: %v", err)
+	}
+
+	handler := NewServerWithWeb(s, webDir)
+	for _, path := range []string{"/", "/subscriptions"} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "panel") {
+			t.Fatalf("expected index for %s, got %d: %s", path, rec.Code, rec.Body.String())
+		}
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/assets/app.js", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "ok") {
+		t.Fatalf("expected asset, got %d: %s", rec.Code, rec.Body.String())
 	}
 }
 

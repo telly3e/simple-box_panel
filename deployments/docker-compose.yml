@@ -1,0 +1,13 @@
+services:
+  panel:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+    volumes:
+      - panel-data:/data
+    restart: unless-stopped
+
+volumes:
+  panel-data:

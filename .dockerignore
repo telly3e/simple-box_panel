@@ -1,0 +1,9 @@
+.git
+.runtime
+apps/web/node_modules
+apps/web/dist
+coverage
+*.db
+*.sqlite
+*.log
+*.exe
