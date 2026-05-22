@@ -1,0 +1,9 @@
+{$PANEL_DOMAIN} {
+	encode zstd gzip
+
+	basicauth {
+		{$PANEL_BASIC_AUTH_USER} {$PANEL_BASIC_AUTH_HASH}
+	}
+
+	reverse_proxy panel:8080
+}

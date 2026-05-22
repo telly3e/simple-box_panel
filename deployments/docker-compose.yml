@@ -1,13 +1,44 @@
+name: sing-panel
+
 services:
   panel:
     build:
       context: ..
       dockerfile: Dockerfile
+    environment:
+      SING_PANEL_ADDR: ${SING_PANEL_ADDR:-:8080}
+      SING_PANEL_DB: ${SING_PANEL_DB:-/data/sing-panel.db}
+      SING_PANEL_WEB_DIR: ${SING_PANEL_WEB_DIR:-/app/web}
     ports:
-      - "8080:8080"
+      - "${PANEL_HTTP_PORT:-8080}:8080"
     volumes:
       - panel-data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  caddy:
+    image: caddy:2-alpine
+    profiles:
+      - proxy
+    env_file:
+      - .env
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      panel:
+        condition: service_healthy
     restart: unless-stopped
 
 volumes:
   panel-data:
+  caddy-data:
+  caddy-config:

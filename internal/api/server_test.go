@@ -100,6 +100,21 @@ func TestSubscriptionRejectsDisabledUser(t *testing.T) {
 	}
 }
 
+func TestListEndpointsReturnEmptyArrays(t *testing.T) {
+	handler := newTestHandler(t)
+	for _, path := range []string{"/api/users", "/api/exit-nodes", "/api/entry-nodes"} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s: expected 200, got %d: %s", path, rec.Code, rec.Body.String())
+		}
+		if strings.TrimSpace(rec.Body.String()) != "[]" {
+			t.Fatalf("%s: expected empty array, got %s", path, rec.Body.String())
+		}
+	}
+}
+
 func TestServerServesWebDistWithSPAFallback(t *testing.T) {
 	s, err := store.Open(filepath.Join(t.TempDir(), "api.db"))
 	if err != nil {

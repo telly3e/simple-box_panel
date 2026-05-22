@@ -3,12 +3,16 @@ param(
     [string]$SingBoxSource,
 
     [string]$Output = "",
-    [string[]]$ExtraTags = @("with_v2ray_api")
+    [string[]]$ExtraTags = @("with_v2ray_api", "with_acme")
 )
 
 $ErrorActionPreference = "Stop"
 
 $sourcePath = Resolve-Path -LiteralPath $SingBoxSource
+$callerPath = Get-Location
+if (![System.IO.Path]::IsPathRooted($Output) -and $Output -ne "") {
+    $Output = Join-Path $callerPath $Output
+}
 $releaseDir = Join-Path $sourcePath "release"
 $isWindowsHost = [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::Windows)
 $isLinuxHost = [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::Linux)
@@ -40,7 +44,7 @@ if (!(Test-Path -LiteralPath $ldflagsFile)) {
 }
 
 $tags = [System.Collections.Generic.List[string]]::new()
-foreach ($tag in ((Get-Content -LiteralPath $defaultTagsFile -Raw) -split "\s+")) {
+foreach ($tag in ((Get-Content -LiteralPath $defaultTagsFile -Raw) -split "[,\s]+")) {
     $trimmed = $tag.Trim()
     if ($trimmed -and !$tags.Contains($trimmed)) {
         $tags.Add($trimmed)
@@ -67,7 +71,7 @@ Write-Host "Output: $Output"
 
 Push-Location $sourcePath
 try {
-    & go build -trimpath -tags $tagString -ldflags $ldflags -o $Output ./cmd/sing-box
+    & go build -trimpath -buildvcs=false -tags $tagString -ldflags $ldflags -o $Output ./cmd/sing-box
     if ($LASTEXITCODE -ne 0) {
         throw "go build failed with exit code $LASTEXITCODE"
     }

@@ -9,7 +9,7 @@ const (
 	StatsModeMock     = "mock"
 	StatsModeV2RayAPI = "v2ray-api"
 
-	SSMethod = "2022-blake3-aes-128-gcm"
+	SSMethod = "aes-128-gcm"
 )
 
 type User struct {

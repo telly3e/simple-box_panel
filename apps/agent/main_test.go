@@ -1,6 +1,10 @@
 package main
 
-import "testing"
+import (
+	"net/http"
+	"net/http/httptest"
+	"testing"
+)
 
 func TestParseV2RayStatsFiltersTrackedUsers(t *testing.T) {
 	stats := []v2rayStat{
@@ -23,5 +27,64 @@ func TestParseV2RayStatsSkipsZeroTraffic(t *testing.T) {
 	events := parseV2RayStats([]v2rayStat{{Name: "user>>>usr_1>>>traffic>>>uplink", Value: 0}}, []string{"usr_1"})
 	if len(events) != 0 {
 		t.Fatalf("expected no zero-value event, got %#v", events)
+	}
+}
+
+func TestResolveEnvPlaceholders(t *testing.T) {
+	t.Setenv("CF_TOKEN", "secret-token")
+	cfg := map[string]any{
+		"certificate_providers": []map[string]any{
+			{
+				"type": "acme",
+				"dns01_challenge": map[string]any{
+					"provider":      "cloudflare",
+					"api_token_env": "CF_TOKEN",
+				},
+			},
+		},
+	}
+	if err := resolveEnvPlaceholders(cfg); err != nil {
+		t.Fatalf("resolve env placeholders: %v", err)
+	}
+	providers := cfg["certificate_providers"].([]map[string]any)
+	challenge := providers[0]["dns01_challenge"].(map[string]any)
+	if challenge["api_token"] != "secret-token" {
+		t.Fatalf("expected resolved api_token, got %#v", challenge)
+	}
+	if _, ok := challenge["api_token_env"]; ok {
+		t.Fatalf("api_token_env should be removed: %#v", challenge)
+	}
+}
+
+func TestResolveEnvPlaceholdersRequiresValue(t *testing.T) {
+	cfg := map[string]any{"api_token_env": "MISSING_TOKEN"}
+	if err := resolveEnvPlaceholders(cfg); err == nil {
+		t.Fatal("expected missing environment variable error")
+	}
+}
+
+func TestAPIClientAddsBasicAuth(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		user, pass, ok := r.BasicAuth()
+		if !ok || user != "admin" || pass != "secret" {
+			http.Error(w, "missing auth", http.StatusUnauthorized)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	t.Cleanup(server.Close)
+
+	client := apiClient{base: server.Client(), basicUser: "admin", basicPass: "secret"}
+	req, err := http.NewRequest(http.MethodGet, server.URL, nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("do request: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("expected 204, got %d", resp.StatusCode)
 	}
 }

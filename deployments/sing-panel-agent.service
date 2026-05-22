@@ -1,0 +1,22 @@
+[Unit]
+Description=sing-panel exit node agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/sing-panel/agent.env
+ExecStart=/opt/sing-panel/sing-panel-agent \
+  --api-url ${SING_PANEL_API_URL} \
+  --node-id ${SING_PANEL_NODE_ID} \
+  --runtime-dir ${SING_PANEL_AGENT_RUNTIME_DIR} \
+  --interval ${SING_PANEL_AGENT_INTERVAL} \
+  --stats-mode ${SING_PANEL_AGENT_STATS_MODE} \
+  --check-config=${SING_PANEL_AGENT_CHECK_CONFIG} \
+  --sing-box-bin ${SING_PANEL_SING_BOX_BIN}
+Restart=always
+RestartSec=5s
+User=root
+
+[Install]
+WantedBy=multi-user.target

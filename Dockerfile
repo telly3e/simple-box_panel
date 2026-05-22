@@ -19,5 +19,8 @@ USER singpanel
 WORKDIR /app
 COPY --from=api-builder /out/sing-panel-api /app/sing-panel-api
 COPY --from=web-builder /src/apps/web/dist /app/web
+ENV SING_PANEL_ADDR=:8080
+ENV SING_PANEL_DB=/data/sing-panel.db
+ENV SING_PANEL_WEB_DIR=/app/web
 EXPOSE 8080
-CMD ["/app/sing-panel-api", "--addr", ":8080", "--db", "/data/sing-panel.db", "--web-dir", "/app/web"]
+CMD ["/app/sing-panel-api"]

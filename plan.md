@@ -65,9 +65,13 @@
 - 已增加 `scripts/build-sing-box.ps1`：读取 sing-box 官方默认 build tags/ldflags，再追加 `with_v2ray_api` 编译。
 - Exit 节点已支持 `stats_mode` / `stats_api_listen`；`v2ray-api` 模式会在 sing-box config 中生成 `experimental.v2ray_api.stats.users`。
 - Agent 已抽象 collector，支持 `--stats-mode auto|mock|v2ray-api`；真实模式通过 gRPC `StatsService.QueryStats` 读取 `user>>>{id}>>>traffic>>>uplink/downlink` 并上报。
+- 前端已支持用户名称/额度编辑、Exit 证书模式与证书字段编辑、统计模式编辑，以及按 Exit 预览 agent desired config。
+- API 容器已支持 `SING_PANEL_ADDR` / `SING_PANEL_DB` / `SING_PANEL_WEB_DIR` 环境变量默认值，并补齐 staging `.env`、Caddy HTTPS/basic-auth 反代示例和 SQLite volume 备份说明。
+- Docker Compose 已在本机实际 build/up 验证通过；空库列表接口固定返回 `[]`，前端改用相对 `/api` 并通过 Vite dev proxy 保持本地开发体验。
+- Agent 已支持面板 Basic Auth，并会在写入 sing-box 配置前把 `*_env` 占位字段解析成真实字段；sing-box 构建脚本默认强制包含 `with_v2ray_api` 和 `with_acme`。
+- 已增加 Exit host 的 agent systemd 模板和环境变量示例，便于 staging 持久化运行 agent + `sing-box check`。
+- Windows 本地已编译带官方默认 tags + `with_v2ray_api` 的 sing-box，并完成本地真实统计烟测：server/client sing-box 通过 Shadowsocks 造流量，agent 从 V2Ray API 采集后用户 `used_bytes` 增长。
 
 ## Next Steps
 
-- 前端补用户额度编辑、节点证书模式编辑、desired config 预览。
-- 增加 staging 环境变量和反代示例，例如公网域名、HTTPS、备份 SQLite volume。
 - 用真实编译了 `with_v2ray_api` 的 sing-box 在 staging 上做端到端统计验收。

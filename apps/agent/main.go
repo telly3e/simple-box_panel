@@ -109,6 +109,8 @@ func main() {
 	singBoxBin := flag.String("sing-box-bin", "sing-box", "sing-box binary path")
 	statsMode := flag.String("stats-mode", "auto", "traffic collector mode: auto, mock, or v2ray-api")
 	v2rayReset := flag.Bool("v2ray-reset", true, "reset V2Ray API counters after each successful query")
+	apiBasicUser := flag.String("api-basic-user", envDefault("SING_PANEL_API_BASIC_USER", ""), "optional API basic auth username")
+	apiBasicPass := flag.String("api-basic-pass", envDefault("SING_PANEL_API_BASIC_PASS", ""), "optional API basic auth password")
 	once := flag.Bool("once", false, "run one iteration and exit")
 	flag.Parse()
 
@@ -116,7 +118,11 @@ func main() {
 		log.Fatal("--node-id is required")
 	}
 
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := apiClient{
+		base:      &http.Client{Timeout: 10 * time.Second},
+		basicUser: *apiBasicUser,
+		basicPass: *apiBasicPass,
+	}
 	var lastVersion int64
 	for {
 		cfg, err := fetchDesired(client, *apiURL, *nodeID)
@@ -159,6 +165,26 @@ func main() {
 	}
 }
 
+func envDefault(name, fallback string) string {
+	if value := os.Getenv(name); value != "" {
+		return value
+	}
+	return fallback
+}
+
+type apiClient struct {
+	base      *http.Client
+	basicUser string
+	basicPass string
+}
+
+func (c apiClient) Do(req *http.Request) (*http.Response, error) {
+	if c.basicUser != "" || c.basicPass != "" {
+		req.SetBasicAuth(c.basicUser, c.basicPass)
+	}
+	return c.base.Do(req)
+}
+
 func selectCollector(mode string, reset bool, cfg desiredConfig) collector {
 	if mode == "auto" || mode == "" {
 		mode = cfg.StatsMode
@@ -171,9 +197,13 @@ func selectCollector(mode string, reset bool, cfg desiredConfig) collector {
 	}
 }
 
-func fetchDesired(client *http.Client, apiURL, nodeID string) (desiredConfig, error) {
+func fetchDesired(client apiClient, apiURL, nodeID string) (desiredConfig, error) {
 	var cfg desiredConfig
-	resp, err := client.Get(fmt.Sprintf("%s/api/agent/%s/desired-config", apiURL, nodeID))
+	req, err := http.NewRequest(http.MethodGet, fmt.Sprintf("%s/api/agent/%s/desired-config", apiURL, nodeID), nil)
+	if err != nil {
+		return cfg, err
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return cfg, err
 	}
@@ -191,12 +221,54 @@ func writeConfig(runtimeDir string, cfg desiredConfig) (string, error) {
 	if err := os.MkdirAll(nodeDir, 0o755); err != nil {
 		return "", err
 	}
+	if err := resolveEnvPlaceholders(cfg.SingBoxConfig); err != nil {
+		return "", err
+	}
 	data, err := json.MarshalIndent(cfg.SingBoxConfig, "", "  ")
 	if err != nil {
 		return "", err
 	}
 	configPath := filepath.Join(nodeDir, "sing-box.json")
 	return configPath, os.WriteFile(configPath, data, 0o644)
+}
+
+func resolveEnvPlaceholders(value any) error {
+	switch typed := value.(type) {
+	case map[string]any:
+		for _, child := range typed {
+			if err := resolveEnvPlaceholders(child); err != nil {
+				return err
+			}
+		}
+		for key, raw := range typed {
+			if !strings.HasSuffix(key, "_env") {
+				continue
+			}
+			envName, ok := raw.(string)
+			if !ok || envName == "" {
+				return fmt.Errorf("%s must name an environment variable", key)
+			}
+			envValue := os.Getenv(envName)
+			if envValue == "" {
+				return fmt.Errorf("environment variable %s is required for %s", envName, key)
+			}
+			typed[strings.TrimSuffix(key, "_env")] = envValue
+			delete(typed, key)
+		}
+	case []any:
+		for _, child := range typed {
+			if err := resolveEnvPlaceholders(child); err != nil {
+				return err
+			}
+		}
+	case []map[string]any:
+		for _, child := range typed {
+			if err := resolveEnvPlaceholders(child); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func validateConfig(singBoxBin, configPath string) error {
@@ -208,8 +280,13 @@ func validateConfig(singBoxBin, configPath string) error {
 	return nil
 }
 
-func postHeartbeat(client *http.Client, apiURL, nodeID string) error {
-	resp, err := client.Post(fmt.Sprintf("%s/api/agent/%s/heartbeat", apiURL, nodeID), "application/json", bytes.NewReader([]byte(`{}`)))
+func postHeartbeat(client apiClient, apiURL, nodeID string) error {
+	req, err := http.NewRequest(http.MethodPost, fmt.Sprintf("%s/api/agent/%s/heartbeat", apiURL, nodeID), bytes.NewReader([]byte(`{}`)))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := client.Do(req)
 	if err != nil {
 		return err
 	}
@@ -299,12 +376,17 @@ func parseV2RayStats(stats []v2rayStat, userIDs []string) []trafficEvent {
 	return events
 }
 
-func postTraffic(client *http.Client, apiURL, nodeID string, events []trafficEvent) error {
+func postTraffic(client apiClient, apiURL, nodeID string, events []trafficEvent) error {
 	if len(events) == 0 {
 		return nil
 	}
 	payload, _ := json.Marshal(map[string]any{"events": events})
-	resp, err := client.Post(fmt.Sprintf("%s/api/agent/%s/traffic", apiURL, nodeID), "application/json", bytes.NewReader(payload))
+	req, err := http.NewRequest(http.MethodPost, fmt.Sprintf("%s/api/agent/%s/traffic", apiURL, nodeID), bytes.NewReader(payload))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := client.Do(req)
 	if err != nil {
 		return err
 	}

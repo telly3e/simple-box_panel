@@ -205,7 +205,7 @@ func (s *Store) ListUsers(ctx context.Context) ([]domain.User, error) {
 		return nil, err
 	}
 	defer rows.Close()
-	var users []domain.User
+	users := []domain.User{}
 	for rows.Next() {
 		u, err := scanUser(rows)
 		if err != nil {
@@ -313,7 +313,7 @@ func (s *Store) ListExitNodes(ctx context.Context) ([]domain.ExitNode, error) {
 		return nil, err
 	}
 	defer rows.Close()
-	var nodes []domain.ExitNode
+	nodes := []domain.ExitNode{}
 	for rows.Next() {
 		n, err := scanExitNode(rows)
 		if err != nil {
@@ -433,7 +433,7 @@ func (s *Store) ListEntryNodes(ctx context.Context) ([]domain.EntryNode, error) 
 		return nil, err
 	}
 	defer rows.Close()
-	var nodes []domain.EntryNode
+	nodes := []domain.EntryNode{}
 	for rows.Next() {
 		n, err := scanEntryNode(rows)
 		if err != nil {
@@ -450,7 +450,7 @@ func (s *Store) ListEntryNodesForExit(ctx context.Context, exitNodeID string) ([
 		return nil, err
 	}
 	defer rows.Close()
-	var nodes []domain.EntryNode
+	nodes := []domain.EntryNode{}
 	for rows.Next() {
 		n, err := scanEntryNode(rows)
 		if err != nil {

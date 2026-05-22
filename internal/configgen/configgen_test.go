@@ -46,6 +46,24 @@ func TestGenerateServerConfigAddsV2RayAPIStatsWhenEnabled(t *testing.T) {
 	}
 }
 
+func TestGenerateServerConfigUsesCloudflareTokenEnvPlaceholder(t *testing.T) {
+	node := domain.ExitNode{
+		ID:                    "exit_1",
+		AnyTLSPort:            2443,
+		SSPort:                8388,
+		CertMode:              domain.CertModeACME,
+		CertDomain:            "example.com",
+		CloudflareAPITokenEnv: "CF_TOKEN",
+		ExpectedConfigVersion: 2,
+	}
+	cfg := GenerateServerConfig(node, nil)
+	providers := cfg.SingBoxConfig["certificate_providers"].([]map[string]any)
+	challenge := providers[0]["dns01_challenge"].(map[string]any)
+	if challenge["api_token_env"] != "CF_TOKEN" {
+		t.Fatalf("unexpected dns01 placeholder: %#v", challenge)
+	}
+}
+
 func TestGenerateClientSubscriptionUsesEntryHostAndUserPasswords(t *testing.T) {
 	user := domain.User{ID: "usr_1", Enabled: true, AnyTLSPassword: "any-pass", SSPassword: "ss-pass"}
 	entries := []domain.EntryNode{{Name: "HK", PublicHost: "hk.example.com", PublicAnyTLSPort: 443, PublicSSPort: 8443}}

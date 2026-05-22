@@ -20,6 +20,14 @@ select {
   font: inherit;
 }
 
+label {
+  display: grid;
+  gap: 6px;
+  color: #4c5a62;
+  font-size: 13px;
+  font-weight: 650;
+}
+
 main {
   min-height: 100vh;
   display: grid;
@@ -55,7 +63,8 @@ button:disabled {
 }
 
 .nav,
-.ghost {
+.ghost,
+.ghost-light {
   color: inherit;
   background: transparent;
   border-radius: 8px;
@@ -70,6 +79,15 @@ button:disabled {
 .nav:hover,
 .ghost:hover {
   background: #263238;
+}
+
+.ghost-light {
+  color: #425058;
+  border: 1px solid #dfe6e2;
+}
+
+.ghost-light:hover {
+  background: #eef3f0;
 }
 
 .refresh {
@@ -119,6 +137,11 @@ small,
   color: #a53e1f;
   border: 1px solid #ffd0bf;
   border-radius: 8px;
+}
+
+.error.slim {
+  max-width: none;
+  padding: 8px 10px;
 }
 
 .stack {
@@ -184,6 +207,10 @@ small,
   min-height: 58px;
 }
 
+.row > .inline-edit {
+  grid-column: 1 / -1;
+}
+
 .row span,
 .row small {
   display: block;
@@ -210,6 +237,14 @@ small,
   margin-bottom: 16px;
 }
 
+.inline-edit {
+  display: grid;
+  grid-template-columns: minmax(160px, 1fr) minmax(110px, 160px) 40px 40px;
+  gap: 8px;
+  align-items: center;
+  width: 100%;
+}
+
 input,
 select {
   min-height: 40px;
@@ -226,6 +261,30 @@ select {
   padding: 0 13px;
   background: #246b60;
   color: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  font-weight: 700;
+}
+
+.icon {
+  width: 40px;
+  min-width: 40px;
+  min-height: 40px;
+  padding: 0;
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.text-button {
+  min-height: 40px;
+  padding: 0 12px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -264,6 +323,50 @@ pre {
   font-size: 13px;
 }
 
+pre.compact {
+  min-height: 240px;
+}
+
+.node-editor {
+  border: 1px solid #e7ece9;
+  border-radius: 8px;
+}
+
+.node-summary {
+  min-height: 58px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 14px;
+  align-items: center;
+  padding: 9px 10px;
+}
+
+.node-summary span,
+.node-summary small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.node-form {
+  display: grid;
+  gap: 12px;
+  padding: 0 10px 12px;
+}
+
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
 @media (max-width: 900px) {
   main {
     grid-template-columns: 1fr;
@@ -299,5 +402,15 @@ pre {
     align-items: stretch;
     flex-direction: column;
   }
-}
 
+  .inline-edit,
+  .form-grid,
+  .node-summary {
+    grid-template-columns: 1fr;
+  }
+
+  .actions,
+  .form-actions {
+    justify-content: flex-start;
+  }
+}
