@@ -10,6 +10,7 @@ import (
 	"math/rand"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"time"
 )
@@ -34,6 +35,8 @@ func main() {
 	nodeID := flag.String("node-id", "", "Exit node ID")
 	runtimeDir := flag.String("runtime-dir", ".runtime/agent", "runtime directory")
 	interval := flag.Duration("interval", 10*time.Second, "poll interval")
+	checkConfig := flag.Bool("check-config", false, "run sing-box check after writing config")
+	singBoxBin := flag.String("sing-box-bin", "sing-box", "sing-box binary path")
 	once := flag.Bool("once", false, "run one iteration and exit")
 	flag.Parse()
 
@@ -49,9 +52,20 @@ func main() {
 			log.Printf("fetch desired config: %v", err)
 		} else {
 			if cfg.Version != lastVersion {
-				if err := writeConfig(*runtimeDir, cfg); err != nil {
+				configPath, err := writeConfig(*runtimeDir, cfg)
+				if err != nil {
 					log.Printf("write config: %v", err)
 				} else {
+					if *checkConfig {
+						if err := validateConfig(*singBoxBin, configPath); err != nil {
+							log.Printf("sing-box check failed: %v", err)
+							if *once {
+								return
+							}
+							time.Sleep(*interval)
+							continue
+						}
+					}
 					lastVersion = cfg.Version
 					log.Printf("wrote desired config version %d", cfg.Version)
 				}
@@ -85,16 +99,26 @@ func fetchDesired(client *http.Client, apiURL, nodeID string) (desiredConfig, er
 	return cfg, err
 }
 
-func writeConfig(runtimeDir string, cfg desiredConfig) error {
+func writeConfig(runtimeDir string, cfg desiredConfig) (string, error) {
 	nodeDir := filepath.Join(runtimeDir, cfg.NodeID)
 	if err := os.MkdirAll(nodeDir, 0o755); err != nil {
-		return err
+		return "", err
 	}
 	data, err := json.MarshalIndent(cfg.SingBoxConfig, "", "  ")
 	if err != nil {
-		return err
+		return "", err
 	}
-	return os.WriteFile(filepath.Join(nodeDir, "sing-box.json"), data, 0o644)
+	configPath := filepath.Join(nodeDir, "sing-box.json")
+	return configPath, os.WriteFile(configPath, data, 0o644)
+}
+
+func validateConfig(singBoxBin, configPath string) error {
+	cmd := exec.Command(singBoxBin, "check", "-c", configPath)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%w: %s", err, string(out))
+	}
+	return nil
 }
 
 func postHeartbeat(client *http.Client, apiURL, nodeID string) error {

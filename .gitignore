@@ -1,9 +1,9 @@
 .runtime/
 *.db
 *.sqlite
+*.exe
 node_modules/
 dist/
 coverage/
 *.log
 .DS_Store
-
