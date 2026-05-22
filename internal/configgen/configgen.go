@@ -92,12 +92,36 @@ func GenerateServerConfig(node domain.ExitNode, users []domain.User) ServerDesir
 		config["certificate_providers"] = providers
 	}
 
+	statsMode := node.StatsMode
+	if statsMode == "" {
+		statsMode = domain.StatsModeMock
+	}
+	statsAPITarget := ""
+	if statsMode == domain.StatsModeV2RayAPI {
+		statsAPITarget = node.StatsAPIListen
+		if statsAPITarget == "" {
+			statsAPITarget = "127.0.0.1:10085"
+		}
+		config["experimental"] = map[string]any{
+			"v2ray_api": map[string]any{
+				"listen": statsAPITarget,
+				"stats": map[string]any{
+					"enabled":   true,
+					"inbounds":  []string{"anytls-in", "ss-in"},
+					"outbounds": []string{"direct"},
+					"users":     tracked,
+				},
+			},
+		}
+	}
+
 	return ServerDesiredConfig{
 		NodeID:          node.ID,
 		Version:         node.ExpectedConfigVersion,
 		SingBoxConfig:   config,
 		TrackedUserIDs:  tracked,
-		StatsMode:       "mock",
+		StatsMode:       statsMode,
+		StatsAPITarget:  statsAPITarget,
 		RuntimeFileHint: "sing-box.json",
 	}
 }

@@ -19,6 +19,33 @@ func TestGenerateServerConfigSkipsDisabledAndOverQuotaUsers(t *testing.T) {
 	}
 }
 
+func TestGenerateServerConfigAddsV2RayAPIStatsWhenEnabled(t *testing.T) {
+	node := domain.ExitNode{
+		ID:                    "exit_1",
+		AnyTLSPort:            2443,
+		SSPort:                8388,
+		CertMode:              domain.CertModeManual,
+		StatsMode:             domain.StatsModeV2RayAPI,
+		StatsAPIListen:        "127.0.0.1:10085",
+		ExpectedConfigVersion: 2,
+	}
+	users := []domain.User{{ID: "active", Enabled: true, AnyTLSPassword: "a", SSPassword: "s"}}
+	cfg := GenerateServerConfig(node, users)
+	if cfg.StatsMode != domain.StatsModeV2RayAPI || cfg.StatsAPITarget != "127.0.0.1:10085" {
+		t.Fatalf("unexpected stats metadata: %#v", cfg)
+	}
+	experimental := cfg.SingBoxConfig["experimental"].(map[string]any)
+	v2rayAPI := experimental["v2ray_api"].(map[string]any)
+	if v2rayAPI["listen"] != "127.0.0.1:10085" {
+		t.Fatalf("unexpected v2ray api listen: %#v", v2rayAPI)
+	}
+	stats := v2rayAPI["stats"].(map[string]any)
+	usersList := stats["users"].([]string)
+	if len(usersList) != 1 || usersList[0] != "active" {
+		t.Fatalf("unexpected stats users: %#v", usersList)
+	}
+}
+
 func TestGenerateClientSubscriptionUsesEntryHostAndUserPasswords(t *testing.T) {
 	user := domain.User{ID: "usr_1", Enabled: true, AnyTLSPassword: "any-pass", SSPassword: "ss-pass"}
 	entries := []domain.EntryNode{{Name: "HK", PublicHost: "hk.example.com", PublicAnyTLSPort: 443, PublicSSPort: 8443}}

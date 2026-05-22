@@ -6,6 +6,9 @@ const (
 	CertModeManual = "manual"
 	CertModeACME   = "acme"
 
+	StatsModeMock     = "mock"
+	StatsModeV2RayAPI = "v2ray-api"
+
 	SSMethod = "2022-blake3-aes-128-gcm"
 )
 
@@ -37,6 +40,8 @@ type ExitNode struct {
 	KeyPath               string     `json:"key_path"`
 	AcmeEmail             string     `json:"acme_email"`
 	CloudflareAPITokenEnv string     `json:"cloudflare_api_token_env"`
+	StatsMode             string     `json:"stats_mode"`
+	StatsAPIListen        string     `json:"stats_api_listen"`
 	LastHeartbeatAt       *time.Time `json:"last_heartbeat_at,omitempty"`
 	ExpectedConfigVersion int64      `json:"expected_config_version"`
 	CreatedAt             time.Time  `json:"created_at"`

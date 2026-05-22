@@ -96,6 +96,38 @@ CREATE TABLE IF NOT EXISTS traffic_events (
   created_at TEXT NOT NULL
 );
 `)
+	if err != nil {
+		return err
+	}
+	if err := s.ensureColumn(ctx, "exit_nodes", "stats_mode", "TEXT NOT NULL DEFAULT 'mock'"); err != nil {
+		return err
+	}
+	return s.ensureColumn(ctx, "exit_nodes", "stats_api_listen", "TEXT NOT NULL DEFAULT '127.0.0.1:10085'")
+}
+
+func (s *Store) ensureColumn(ctx context.Context, table, column, definition string) error {
+	rows, err := s.db.QueryContext(ctx, "PRAGMA table_info("+table+")")
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, dataType string
+		var notNull int
+		var defaultValue sql.NullString
+		var pk int
+		if err := rows.Scan(&cid, &name, &dataType, &notNull, &defaultValue, &pk); err != nil {
+			return err
+		}
+		if name == column {
+			return nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx, "ALTER TABLE "+table+" ADD COLUMN "+column+" "+definition)
 	return err
 }
 
@@ -249,15 +281,25 @@ func (s *Store) CreateExitNode(ctx context.Context, node domain.ExitNode) (domai
 	if node.CertMode == "" {
 		node.CertMode = domain.CertModeManual
 	}
+	if node.StatsMode == "" {
+		node.StatsMode = domain.StatsModeMock
+	}
+	if node.StatsAPIListen == "" {
+		node.StatsAPIListen = "127.0.0.1:10085"
+	}
+	if node.StatsMode != domain.StatsModeMock && node.StatsMode != domain.StatsModeV2RayAPI {
+		return domain.ExitNode{}, errors.New("stats_mode must be mock or v2ray-api")
+	}
 	node.ID = ids.NewID("exit")
 	node.ExpectedConfigVersion = 1
 	node.CreatedAt = time.Now().UTC()
 	node.UpdatedAt = time.Now().UTC()
 	_, err := s.db.ExecContext(ctx, `
-INSERT INTO exit_nodes (id, name, hostname, anytls_port, ss_port, cert_mode, cert_domain, certificate_path, key_path, acme_email, cloudflare_api_token_env, expected_config_version, created_at, updated_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+INSERT INTO exit_nodes (id, name, hostname, anytls_port, ss_port, cert_mode, cert_domain, certificate_path, key_path, acme_email, cloudflare_api_token_env, stats_mode, stats_api_listen, expected_config_version, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		node.ID, node.Name, node.Hostname, node.AnyTLSPort, node.SSPort, node.CertMode, node.CertDomain,
 		node.CertificatePath, node.KeyPath, node.AcmeEmail, node.CloudflareAPITokenEnv,
+		node.StatsMode, node.StatsAPIListen,
 		node.ExpectedConfigVersion, node.CreatedAt.Format(time.RFC3339Nano), node.UpdatedAt.Format(time.RFC3339Nano))
 	if err != nil {
 		return domain.ExitNode{}, err
@@ -266,7 +308,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 }
 
 func (s *Store) ListExitNodes(ctx context.Context) ([]domain.ExitNode, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, name, hostname, anytls_port, ss_port, cert_mode, cert_domain, certificate_path, key_path, acme_email, cloudflare_api_token_env, last_heartbeat_at, expected_config_version, created_at, updated_at FROM exit_nodes ORDER BY created_at DESC`)
+	rows, err := s.db.QueryContext(ctx, `SELECT id, name, hostname, anytls_port, ss_port, cert_mode, cert_domain, certificate_path, key_path, acme_email, cloudflare_api_token_env, stats_mode, stats_api_listen, last_heartbeat_at, expected_config_version, created_at, updated_at FROM exit_nodes ORDER BY created_at DESC`)
 	if err != nil {
 		return nil, err
 	}
@@ -283,7 +325,7 @@ func (s *Store) ListExitNodes(ctx context.Context) ([]domain.ExitNode, error) {
 }
 
 func (s *Store) GetExitNode(ctx context.Context, id string) (domain.ExitNode, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT id, name, hostname, anytls_port, ss_port, cert_mode, cert_domain, certificate_path, key_path, acme_email, cloudflare_api_token_env, last_heartbeat_at, expected_config_version, created_at, updated_at FROM exit_nodes WHERE id = ?`, id)
+	row := s.db.QueryRowContext(ctx, `SELECT id, name, hostname, anytls_port, ss_port, cert_mode, cert_domain, certificate_path, key_path, acme_email, cloudflare_api_token_env, stats_mode, stats_api_listen, last_heartbeat_at, expected_config_version, created_at, updated_at FROM exit_nodes WHERE id = ?`, id)
 	return scanExitNode(row)
 }
 
@@ -298,6 +340,8 @@ type ExitNodePatch struct {
 	KeyPath               *string `json:"key_path"`
 	AcmeEmail             *string `json:"acme_email"`
 	CloudflareAPITokenEnv *string `json:"cloudflare_api_token_env"`
+	StatsMode             *string `json:"stats_mode"`
+	StatsAPIListen        *string `json:"stats_api_listen"`
 }
 
 func (s *Store) PatchExitNode(ctx context.Context, id string, patch ExitNodePatch) (domain.ExitNode, error) {
@@ -335,12 +379,24 @@ func (s *Store) PatchExitNode(ctx context.Context, id string, patch ExitNodePatc
 	if patch.CloudflareAPITokenEnv != nil {
 		n.CloudflareAPITokenEnv = *patch.CloudflareAPITokenEnv
 	}
+	if patch.StatsMode != nil {
+		if *patch.StatsMode != domain.StatsModeMock && *patch.StatsMode != domain.StatsModeV2RayAPI {
+			return domain.ExitNode{}, errors.New("stats_mode must be mock or v2ray-api")
+		}
+		n.StatsMode = *patch.StatsMode
+	}
+	if patch.StatsAPIListen != nil {
+		n.StatsAPIListen = *patch.StatsAPIListen
+	}
+	if n.StatsAPIListen == "" {
+		n.StatsAPIListen = "127.0.0.1:10085"
+	}
 	n.ExpectedConfigVersion++
 	n.UpdatedAt = time.Now().UTC()
 	_, err = s.db.ExecContext(ctx, `
-UPDATE exit_nodes SET name=?, hostname=?, anytls_port=?, ss_port=?, cert_mode=?, cert_domain=?, certificate_path=?, key_path=?, acme_email=?, cloudflare_api_token_env=?, expected_config_version=?, updated_at=? WHERE id=?`,
+UPDATE exit_nodes SET name=?, hostname=?, anytls_port=?, ss_port=?, cert_mode=?, cert_domain=?, certificate_path=?, key_path=?, acme_email=?, cloudflare_api_token_env=?, stats_mode=?, stats_api_listen=?, expected_config_version=?, updated_at=? WHERE id=?`,
 		n.Name, n.Hostname, n.AnyTLSPort, n.SSPort, n.CertMode, n.CertDomain, n.CertificatePath, n.KeyPath,
-		n.AcmeEmail, n.CloudflareAPITokenEnv, n.ExpectedConfigVersion, n.UpdatedAt.Format(time.RFC3339Nano), n.ID)
+		n.AcmeEmail, n.CloudflareAPITokenEnv, n.StatsMode, n.StatsAPIListen, n.ExpectedConfigVersion, n.UpdatedAt.Format(time.RFC3339Nano), n.ID)
 	if err != nil {
 		return domain.ExitNode{}, err
 	}
@@ -526,7 +582,13 @@ func scanExitNode(row scanner) (domain.ExitNode, error) {
 	var n domain.ExitNode
 	var heartbeat sql.NullString
 	var created, updated string
-	err := row.Scan(&n.ID, &n.Name, &n.Hostname, &n.AnyTLSPort, &n.SSPort, &n.CertMode, &n.CertDomain, &n.CertificatePath, &n.KeyPath, &n.AcmeEmail, &n.CloudflareAPITokenEnv, &heartbeat, &n.ExpectedConfigVersion, &created, &updated)
+	err := row.Scan(&n.ID, &n.Name, &n.Hostname, &n.AnyTLSPort, &n.SSPort, &n.CertMode, &n.CertDomain, &n.CertificatePath, &n.KeyPath, &n.AcmeEmail, &n.CloudflareAPITokenEnv, &n.StatsMode, &n.StatsAPIListen, &heartbeat, &n.ExpectedConfigVersion, &created, &updated)
+	if n.StatsMode == "" {
+		n.StatsMode = domain.StatsModeMock
+	}
+	if n.StatsAPIListen == "" {
+		n.StatsAPIListen = "127.0.0.1:10085"
+	}
 	n.LastHeartbeatAt = nullableTime(heartbeat)
 	n.CreatedAt = parseTime(created)
 	n.UpdatedAt = parseTime(updated)

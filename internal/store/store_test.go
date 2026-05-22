@@ -66,3 +66,24 @@ func TestEntryRequiresExistingExitNode(t *testing.T) {
 		t.Fatalf("unexpected default ports: %#v", entry)
 	}
 }
+
+func TestExitNodeStatsModeCanSwitchToV2RayAPI(t *testing.T) {
+	ctx := context.Background()
+	s := newTestStore(t)
+	exit, err := s.CreateExitNode(ctx, domain.ExitNode{Name: "exit", Hostname: "exit.local"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if exit.StatsMode != domain.StatsModeMock || exit.StatsAPIListen != "127.0.0.1:10085" {
+		t.Fatalf("unexpected default stats fields: %#v", exit)
+	}
+	mode := domain.StatsModeV2RayAPI
+	listen := "127.0.0.1:19090"
+	updated, err := s.PatchExitNode(ctx, exit.ID, ExitNodePatch{StatsMode: &mode, StatsAPIListen: &listen})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.StatsMode != domain.StatsModeV2RayAPI || updated.StatsAPIListen != listen {
+		t.Fatalf("unexpected patched stats fields: %#v", updated)
+	}
+}

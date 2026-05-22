@@ -4,7 +4,7 @@ Lightweight local-first MVP for managing sing-box Entry/Exit nodes, AnyTLS/Shado
 
 ## Prerequisites
 
-- Go 1.22+
+- Go 1.25.5+
 - Node.js 20+
 - npm
 
@@ -31,6 +31,15 @@ After creating an Exit node in the UI or API, run the agent with that node ID:
 ```powershell
 go run ./apps/agent --node-id <exit-node-id>
 ```
+
+By default the Agent follows the node `stats_mode` from the API. New nodes use `mock`, so local development works without a running sing-box process. To test the real V2Ray API collector, patch an Exit node to `v2ray-api` and point it at sing-box's local API listener:
+
+```powershell
+Invoke-RestMethod http://localhost:8080/api/exit-nodes/<exit-node-id> -Method Patch -ContentType application/json -Body '{"stats_mode":"v2ray-api","stats_api_listen":"127.0.0.1:10085"}'
+go run ./apps/agent --node-id <exit-node-id> --stats-mode auto
+```
+
+`--stats-mode mock` forces local mock traffic. `--stats-mode v2ray-api` forces gRPC collection from `stats_api_target`; `--v2ray-reset=true` makes each successful query report deltas by resetting counters after read.
 
 The API stores SQLite data in `.runtime/sing-panel.db` by default. The agent writes generated sing-box configs to `.runtime/agent/<node-id>/sing-box.json`.
 
