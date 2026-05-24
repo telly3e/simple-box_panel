@@ -62,6 +62,9 @@ if [[ -z "$PANEL_URL" ]]; then
   exit 2
 fi
 
+if [[ "$PANEL_URL" != http://* && "$PANEL_URL" != https://* ]]; then
+  PANEL_URL="http://${PANEL_URL}"
+fi
 PANEL_URL="${PANEL_URL%/}"
 CREATED_USER_ID=""
 CREATED_NODE_ID=""
@@ -87,7 +90,7 @@ json_assert() {
   local expr="$1"
   local message="$2"
   shift 2
-  python3 -c 'import json,sys; data=json.load(sys.stdin); ok=bool(eval(sys.argv[1], {}, {"data": data, "args": sys.argv[2:]})); sys.exit(0 if ok else 1)' "$expr" "$@" || {
+  python3 -c 'import json,sys; data=json.load(sys.stdin); scope={"data": data, "args": sys.argv[2:]}; ok=bool(eval(sys.argv[1], scope, scope)); sys.exit(0 if ok else 1)' "$expr" "$@" || {
     echo "$message" >&2
     exit 1
   }
