@@ -37,6 +37,11 @@ type trafficEvent struct {
 	Source        string `json:"source"`
 }
 
+type heartbeatStatus struct {
+	AppliedConfigVersion int64  `json:"applied_config_version,omitempty"`
+	LastError            string `json:"last_error,omitempty"`
+}
+
 type collector interface {
 	Collect(ctx context.Context, cfg desiredConfig) ([]trafficEvent, error)
 }
@@ -107,10 +112,13 @@ func main() {
 	interval := flag.Duration("interval", 10*time.Second, "poll interval")
 	checkConfig := flag.Bool("check-config", false, "run sing-box check after writing config")
 	singBoxBin := flag.String("sing-box-bin", "sing-box", "sing-box binary path")
+	singBoxService := flag.String("sing-box-service", envDefault("SING_PANEL_SING_BOX_SERVICE", ""), "optional systemd service to restart after applying a valid config")
 	statsMode := flag.String("stats-mode", "auto", "traffic collector mode: auto, mock, or v2ray-api")
 	v2rayReset := flag.Bool("v2ray-reset", true, "reset V2Ray API counters after each successful query")
 	apiBasicUser := flag.String("api-basic-user", envDefault("SING_PANEL_API_BASIC_USER", ""), "optional API basic auth username")
 	apiBasicPass := flag.String("api-basic-pass", envDefault("SING_PANEL_API_BASIC_PASS", ""), "optional API basic auth password")
+	agentToken := flag.String("agent-token", envDefault("SING_PANEL_AGENT_TOKEN", ""), "agent token for this Exit node")
+	applyOnly := flag.Bool("apply-only", false, "write, validate, and optionally restart config without collecting traffic")
 	once := flag.Bool("once", false, "run one iteration and exit")
 	flag.Parse()
 
@@ -119,43 +127,46 @@ func main() {
 	}
 
 	client := apiClient{
-		base:      &http.Client{Timeout: 10 * time.Second},
-		basicUser: *apiBasicUser,
-		basicPass: *apiBasicPass,
+		base:       &http.Client{Timeout: 10 * time.Second},
+		basicUser:  *apiBasicUser,
+		basicPass:  *apiBasicPass,
+		agentToken: *agentToken,
 	}
-	var lastVersion int64
+	var appliedVersion int64
+	var lastError string
 	for {
 		cfg, err := fetchDesired(client, *apiURL, *nodeID)
 		if err != nil {
-			log.Printf("fetch desired config: %v", err)
-		} else {
-			if cfg.Version != lastVersion {
-				configPath, err := writeConfig(*runtimeDir, cfg)
-				if err != nil {
-					log.Printf("write config: %v", err)
-				} else {
-					if *checkConfig {
-						if err := validateConfig(*singBoxBin, configPath); err != nil {
-							log.Printf("sing-box check failed: %v", err)
-							if *once {
-								return
-							}
-							time.Sleep(*interval)
-							continue
-						}
-					}
-					lastVersion = cfg.Version
-					log.Printf("wrote desired config version %d", cfg.Version)
-				}
-			}
-			if err := postHeartbeat(client, *apiURL, *nodeID); err != nil {
+			lastError = fmt.Sprintf("fetch desired config: %v", err)
+			log.Print(lastError)
+			if err := postHeartbeat(client, *apiURL, *nodeID, heartbeatStatus{AppliedConfigVersion: appliedVersion, LastError: lastError}); err != nil {
 				log.Printf("heartbeat: %v", err)
 			}
-			events, err := selectCollector(*statsMode, *v2rayReset, cfg).Collect(context.Background(), cfg)
-			if err != nil {
-				log.Printf("collect traffic: %v", err)
-			} else if err := postTraffic(client, *apiURL, *nodeID, events); err != nil {
-				log.Printf("traffic: %v", err)
+		} else {
+			if cfg.Version != appliedVersion {
+				if _, err := applyDesiredConfig(*runtimeDir, cfg, *checkConfig, *singBoxBin, *singBoxService); err != nil {
+					lastError = fmt.Sprintf("apply config version %d: %v", cfg.Version, err)
+					log.Print(lastError)
+				} else {
+					appliedVersion = cfg.Version
+					lastError = ""
+					log.Printf("applied desired config version %d", cfg.Version)
+				}
+			}
+			if !*applyOnly {
+				events, err := selectCollector(*statsMode, *v2rayReset, cfg).Collect(context.Background(), cfg)
+				if err != nil {
+					lastError = fmt.Sprintf("collect traffic: %v", err)
+					log.Print(lastError)
+				} else if err := postTraffic(client, *apiURL, *nodeID, events); err != nil {
+					lastError = fmt.Sprintf("traffic: %v", err)
+					log.Print(lastError)
+				} else if cfg.Version == appliedVersion {
+					lastError = ""
+				}
+			}
+			if err := postHeartbeat(client, *apiURL, *nodeID, heartbeatStatus{AppliedConfigVersion: appliedVersion, LastError: lastError}); err != nil {
+				log.Printf("heartbeat: %v", err)
 			}
 		}
 		if *once {
@@ -173,14 +184,18 @@ func envDefault(name, fallback string) string {
 }
 
 type apiClient struct {
-	base      *http.Client
-	basicUser string
-	basicPass string
+	base       *http.Client
+	basicUser  string
+	basicPass  string
+	agentToken string
 }
 
 func (c apiClient) Do(req *http.Request) (*http.Response, error) {
 	if c.basicUser != "" || c.basicPass != "" {
 		req.SetBasicAuth(c.basicUser, c.basicPass)
+	}
+	if c.agentToken != "" {
+		req.Header.Set("X-Sing-Panel-Agent-Token", c.agentToken)
 	}
 	return c.base.Do(req)
 }
@@ -232,6 +247,24 @@ func writeConfig(runtimeDir string, cfg desiredConfig) (string, error) {
 	return configPath, os.WriteFile(configPath, data, 0o644)
 }
 
+func applyDesiredConfig(runtimeDir string, cfg desiredConfig, checkConfig bool, singBoxBin, service string) (string, error) {
+	configPath, err := writeConfig(runtimeDir, cfg)
+	if err != nil {
+		return "", err
+	}
+	if checkConfig {
+		if err := validateConfig(singBoxBin, configPath); err != nil {
+			return "", fmt.Errorf("sing-box check failed: %w", err)
+		}
+	}
+	if service != "" {
+		if err := restartSystemdService(service); err != nil {
+			return "", err
+		}
+	}
+	return configPath, nil
+}
+
 func resolveEnvPlaceholders(value any) error {
 	switch typed := value.(type) {
 	case map[string]any:
@@ -280,8 +313,21 @@ func validateConfig(singBoxBin, configPath string) error {
 	return nil
 }
 
-func postHeartbeat(client apiClient, apiURL, nodeID string) error {
-	req, err := http.NewRequest(http.MethodPost, fmt.Sprintf("%s/api/agent/%s/heartbeat", apiURL, nodeID), bytes.NewReader([]byte(`{}`)))
+func restartSystemdService(service string) error {
+	cmd := exec.Command("systemctl", "restart", service)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("restart %s: %w: %s", service, err, string(out))
+	}
+	return nil
+}
+
+func postHeartbeat(client apiClient, apiURL, nodeID string, status heartbeatStatus) error {
+	payload, err := json.Marshal(status)
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequest(http.MethodPost, fmt.Sprintf("%s/api/agent/%s/heartbeat", apiURL, nodeID), bytes.NewReader(payload))
 	if err != nil {
 		return err
 	}

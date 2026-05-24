@@ -1,15 +1,36 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { Activity, Database, Edit3, Eye, Play, Plus, RefreshCcw, Save, Server, Users, X } from 'lucide-react';
+import { Activity, Database, Edit3, Eye, Play, Plus, RefreshCcw, Save, Server, Trash2, Users, X } from 'lucide-react';
 import './styles.css';
 
 const API = '/api';
+const SS_METHODS = [
+  '2022-blake3-aes-128-gcm',
+  '2022-blake3-aes-256-gcm',
+  '2022-blake3-chacha20-poly1305',
+  'none',
+  'aes-128-gcm',
+  'aes-192-gcm',
+  'aes-256-gcm',
+  'chacha20-ietf-poly1305',
+  'xchacha20-ietf-poly1305',
+] as const;
+const DEFAULT_ANYTLS_PADDING_SCHEME = [
+  'stop=8',
+  '0=30-30',
+  '1=100-400',
+  '2=400-500,c,500-1000,c,500-1000,c,500-1000,c,500-1000',
+  '3=9-9,500-1000',
+  '4=500-1000',
+  '5=500-1000',
+  '6=500-1000',
+  '7=500-1000',
+].join('\n');
 
 type Summary = {
   user_count: number;
   enabled_users: number;
   exit_node_count: number;
-  entry_node_count: number;
   total_used_bytes: number;
   online_exit_nodes: number;
 };
@@ -22,33 +43,43 @@ type User = {
   used_bytes: number;
   anytls_password: string;
   ss_password: string;
+  ss_2022_password_16: string;
+  ss_2022_password_32: string;
+  subscription_token: string;
 };
 
 type ExitNode = {
   id: string;
   name: string;
   hostname: string;
+  enabled: boolean;
+  anytls_enabled: boolean;
+  ss_enabled: boolean;
   anytls_port: number;
+  anytls_padding_scheme: string;
   ss_port: number;
+  ss_method: string;
+  ss_2022_server_password_16: string;
+  ss_2022_server_password_32: string;
+  relay_enabled: boolean;
+  relay_host: string;
+  relay_anytls_port: number;
+  relay_ss_port: number;
   cert_mode: string;
   cert_domain: string;
   certificate_path: string;
   key_path: string;
   acme_email: string;
   cloudflare_api_token_env: string;
+  agent_token: string;
   stats_mode: string;
   stats_api_listen: string;
   last_heartbeat_at?: string;
+  applied_config_version: number;
+  last_applied_at?: string;
+  last_agent_error: string;
+  last_agent_error_at?: string;
   expected_config_version: number;
-};
-
-type EntryNode = {
-  id: string;
-  name: string;
-  public_host: string;
-  public_anytls_port: number;
-  public_ss_port: number;
-  exit_node_id: string;
 };
 
 type Tab = 'dashboard' | 'users' | 'nodes' | 'subscriptions';
@@ -91,22 +122,19 @@ function App() {
   const [summary, setSummary] = useState<Summary | null>(null);
   const [users, setUsers] = useState<User[]>([]);
   const [exits, setExits] = useState<ExitNode[]>([]);
-  const [entries, setEntries] = useState<EntryNode[]>([]);
   const [error, setError] = useState('');
 
   async function loadAll() {
     setError('');
     try {
-      const [nextSummary, nextUsers, nextExits, nextEntries] = await Promise.all([
+      const [nextSummary, nextUsers, nextExits] = await Promise.all([
         api<Summary>('/summary'),
         api<User[]>('/users'),
         api<ExitNode[]>('/exit-nodes'),
-        api<EntryNode[]>('/entry-nodes'),
       ]);
       setSummary(nextSummary);
       setUsers(nextUsers ?? []);
       setExits(nextExits ?? []);
-      setEntries(nextEntries ?? []);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'request failed');
     }
@@ -141,9 +169,9 @@ function App() {
           </div>
           {error && <div className="error">{error}</div>}
         </header>
-        {tab === 'dashboard' && <Dashboard summary={summary} users={users} exits={exits} entries={entries} />}
+        {tab === 'dashboard' && <Dashboard summary={summary} users={users} exits={exits} />}
         {tab === 'users' && <UsersView users={users} reload={loadAll} />}
-        {tab === 'nodes' && <NodesView exits={exits} entries={entries} reload={loadAll} />}
+        {tab === 'nodes' && <NodesView exits={exits} reload={loadAll} />}
         {tab === 'subscriptions' && <SubscriptionsView users={users} />}
       </section>
     </main>
@@ -163,13 +191,13 @@ function tabTitle(tab: Tab) {
   return ({ dashboard: '仪表盘', users: '用户管理', nodes: '节点拓扑', subscriptions: '订阅预览' } as const)[tab];
 }
 
-function Dashboard({ summary, users, exits, entries }: { summary: Summary | null; users: User[]; exits: ExitNode[]; entries: EntryNode[] }) {
+function Dashboard({ summary, users, exits }: { summary: Summary | null; users: User[]; exits: ExitNode[] }) {
   return (
     <div className="stack">
       <div className="metrics">
         <Metric label="用户" value={summary?.user_count ?? 0} sub={`${summary?.enabled_users ?? 0} enabled`} />
         <Metric label="Exit" value={summary?.exit_node_count ?? 0} sub={`${summary?.online_exit_nodes ?? 0} online`} />
-        <Metric label="Entry" value={summary?.entry_node_count ?? 0} sub="public nodes" />
+        <Metric label="中转" value={exits.filter((node) => node.relay_enabled).length} sub="relay endpoints" />
         <Metric label="总用量" value={formatBytes(summary?.total_used_bytes ?? 0)} sub="accounted traffic" />
       </div>
       <div className="grid two">
@@ -188,13 +216,7 @@ function Dashboard({ summary, users, exits, entries }: { summary: Summary | null
             {exits.map((node) => (
               <div className="row" key={node.id}>
                 <span>{node.name}</span>
-                <strong>{node.last_heartbeat_at ? 'online' : 'offline'}</strong>
-              </div>
-            ))}
-            {entries.map((node) => (
-              <div className="row muted" key={node.id}>
-                <span>{node.name}</span>
-                <strong>{node.public_host}</strong>
+                <strong>{nodeStatus(node)}</strong>
               </div>
             ))}
           </Rows>
@@ -261,6 +283,39 @@ function UsersView({ users, reload }: { users: User[]; reload: () => Promise<voi
     }
   }
 
+  async function resetSubscription(user: User) {
+    setError('');
+    try {
+      await api(`/users/${user.id}`, { method: 'PATCH', body: JSON.stringify({ reset_subscription_token: true }) });
+      await reload();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'request failed');
+    }
+  }
+
+  async function resetTraffic(user: User) {
+    setError('');
+    try {
+      await api(`/users/${user.id}`, { method: 'PATCH', body: JSON.stringify({ reset_used_bytes: true }) });
+      await reload();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'request failed');
+    }
+  }
+
+  async function deleteUser(user: User) {
+    if (!window.confirm(`删除用户 ${user.name}？订阅和历史流量记录也会一起删除。`)) {
+      return;
+    }
+    setError('');
+    try {
+      await api(`/users/${user.id}`, { method: 'DELETE' });
+      await reload();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'request failed');
+    }
+  }
+
   function startEdit(user: User) {
     setEditingID(user.id);
     setEditName(user.name);
@@ -310,7 +365,10 @@ function UsersView({ users, reload }: { users: User[]; reload: () => Promise<voi
                   <strong>{formatBytes(user.used_bytes)} / {user.quota_bytes ? formatBytes(user.quota_bytes) : '不限'}</strong>
                   <div className="actions">
                     <button className="icon ghost-light" onClick={() => startEdit(user)} title="编辑用户"><Edit3 size={17} /></button>
+                    <button className="icon ghost-light" onClick={() => resetTraffic(user)} title="重置流量"><RefreshCcw size={17} /></button>
+                    <button className="ghost-light text-button" onClick={() => resetSubscription(user)} title="重置订阅链接">Token</button>
                     <button className={user.enabled ? 'toggle on' : 'toggle'} onClick={() => toggle(user)}>{user.enabled ? '启用' : '停用'}</button>
+                    <button className="icon ghost-light danger" onClick={() => deleteUser(user)} title="删除用户"><Trash2 size={17} /></button>
                   </div>
                 </>
               )}
@@ -322,17 +380,12 @@ function UsersView({ users, reload }: { users: User[]; reload: () => Promise<voi
   );
 }
 
-function NodesView({ exits, entries, reload }: { exits: ExitNode[]; entries: EntryNode[]; reload: () => Promise<void> }) {
-  const [exitName, setExitName] = useState('HK Exit');
-  const [exitHost, setExitHost] = useState('exit.local');
-  const [entryName, setEntryName] = useState('HK Entry');
-  const [entryHost, setEntryHost] = useState('hk.example.com');
-  const [selectedExit, setSelectedExit] = useState('');
+function NodesView({ exits, reload }: { exits: ExitNode[]; reload: () => Promise<void> }) {
+  const [exitName, setExitName] = useState('JP Node');
+  const [exitHost, setExitHost] = useState('jp.example.com');
   const [preview, setPreview] = useState('');
   const [previewTitle, setPreviewTitle] = useState('desired config');
   const [error, setError] = useState('');
-
-  const exitID = selectedExit || exits[0]?.id || '';
 
   async function createExit(event: React.FormEvent) {
     event.preventDefault();
@@ -343,8 +396,13 @@ function NodesView({ exits, entries, reload }: { exits: ExitNode[]; entries: Ent
         body: JSON.stringify({
           name: exitName,
           hostname: exitHost,
+          enabled: true,
+          anytls_enabled: true,
+          ss_enabled: true,
           anytls_port: 2443,
           ss_port: 8388,
+          ss_method: '2022-blake3-aes-128-gcm',
+          relay_enabled: false,
           cert_mode: 'manual',
           certificate_path: '/etc/sing-box/cert.pem',
           key_path: '/etc/sing-box/key.pem',
@@ -356,30 +414,12 @@ function NodesView({ exits, entries, reload }: { exits: ExitNode[]; entries: Ent
     }
   }
 
-  async function createEntry(event: React.FormEvent) {
-    event.preventDefault();
-    setError('');
-    try {
-      await api('/entry-nodes', {
-        method: 'POST',
-        body: JSON.stringify({
-          name: entryName,
-          public_host: entryHost,
-          public_anytls_port: 443,
-          public_ss_port: 8443,
-          exit_node_id: exitID,
-        }),
-      });
-      await reload();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'request failed');
-    }
-  }
-
   async function loadDesiredConfig(node: ExitNode) {
     setError('');
     try {
-      const data = await api<Record<string, unknown>>(`/agent/${node.id}/desired-config`);
+      const data = await api<Record<string, unknown>>(`/agent/${node.id}/desired-config`, {
+        headers: { 'X-Sing-Panel-Agent-Token': node.agent_token },
+      });
       setPreviewTitle(`${node.name} desired config`);
       setPreview(JSON.stringify(data, null, 2));
     } catch (err) {
@@ -391,35 +431,27 @@ function NodesView({ exits, entries, reload }: { exits: ExitNode[]; entries: Ent
     <div className="stack">
       {error && <div className="error">{error}</div>}
       <div className="grid two">
-        <Panel title="Exit">
+        <Panel title="节点">
           <form className="form" onSubmit={createExit}>
             <input value={exitName} onChange={(e) => setExitName(e.target.value)} required />
             <input value={exitHost} onChange={(e) => setExitHost(e.target.value)} required />
-            <button className="primary"><Plus size={17} />新增 Exit</button>
+            <button className="primary"><Plus size={17} />新增节点</button>
           </form>
-          <Rows empty="暂无 Exit">
+          <Rows empty="暂无节点">
             {exits.map((node) => (
               <ExitNodeEditor key={node.id} node={node} reload={reload} onPreview={() => loadDesiredConfig(node)} />
             ))}
           </Rows>
         </Panel>
-        <Panel title="Entry">
-          <form className="form" onSubmit={createEntry}>
-            <input value={entryName} onChange={(e) => setEntryName(e.target.value)} required />
-            <input value={entryHost} onChange={(e) => setEntryHost(e.target.value)} required />
-            <select value={exitID} onChange={(e) => setSelectedExit(e.target.value)} required>
-              {exits.map((node) => <option key={node.id} value={node.id}>{node.name}</option>)}
-            </select>
-            <button className="primary" disabled={!exitID}><Plus size={17} />新增 Entry</button>
-          </form>
-          <Rows empty="暂无 Entry">
-            {entries.map((node) => (
+        <Panel title="订阅出口">
+          <Rows empty="暂无可用节点">
+            {exits.filter((node) => node.enabled).map((node) => (
               <div className="row tall" key={node.id}>
                 <div>
                   <span>{node.name}</span>
-                  <small>{node.public_host}</small>
+                  <small>{node.relay_enabled ? node.relay_host : node.hostname}</small>
                 </div>
-                <strong>{node.public_anytls_port}/{node.public_ss_port}</strong>
+                <strong>{protocolSummary(node)}</strong>
               </div>
             ))}
           </Rows>
@@ -441,7 +473,7 @@ function ExitNodeEditor({ node, reload, onPreview }: { node: ExitNode; reload: (
     setForm(exitFormFromNode(node));
   }, [node]);
 
-  function update(key: keyof typeof form, value: string) {
+  function update(key: keyof typeof form, value: string | boolean) {
     setForm((current) => ({ ...current, [key]: value }));
   }
 
@@ -454,8 +486,16 @@ function ExitNodeEditor({ node, reload, onPreview }: { node: ExitNode; reload: (
         body: JSON.stringify({
           name: form.name,
           hostname: form.hostname,
+          anytls_enabled: form.anytls_enabled,
+          ss_enabled: form.ss_enabled,
           anytls_port: Number(form.anytls_port),
+          anytls_padding_scheme: form.anytls_padding_scheme,
           ss_port: Number(form.ss_port),
+          ss_method: form.ss_method,
+          relay_enabled: form.relay_enabled,
+          relay_host: form.relay_host,
+          relay_anytls_port: Number(form.relay_anytls_port || 0),
+          relay_ss_port: Number(form.relay_ss_port || 0),
           cert_mode: form.cert_mode,
           cert_domain: form.cert_domain,
           certificate_path: form.certificate_path,
@@ -473,26 +513,77 @@ function ExitNodeEditor({ node, reload, onPreview }: { node: ExitNode; reload: (
     }
   }
 
+  async function resetAgentToken() {
+    setError('');
+    try {
+      await api(`/exit-nodes/${node.id}`, { method: 'PATCH', body: JSON.stringify({ reset_agent_token: true }) });
+      await reload();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'request failed');
+    }
+  }
+
+  async function toggleNode() {
+    setError('');
+    try {
+      await api(`/exit-nodes/${node.id}`, { method: 'PATCH', body: JSON.stringify({ enabled: !node.enabled }) });
+      await reload();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'request failed');
+    }
+  }
+
+  async function deleteNode() {
+    if (!window.confirm(`删除节点 ${node.name}？面板会停止管理它，并删除该节点的历史流量记录。`)) {
+      return;
+    }
+    setError('');
+    try {
+      await api(`/exit-nodes/${node.id}`, { method: 'DELETE' });
+      await reload();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'request failed');
+    }
+  }
+
   return (
     <div className="node-editor">
       <div className="node-summary">
         <div>
           <span>{node.name}</span>
-          <small>{node.hostname} · {node.cert_mode} · v{node.expected_config_version}</small>
+          <small>{node.hostname} · {node.enabled ? '运行' : '暂停'} · {protocolSummary(node)} · {node.relay_enabled ? '中转' : '直连'} · {versionSummary(node)}</small>
+          <small>agent token: {node.agent_token}</small>
+          {node.last_agent_error && <small className="danger-text">{node.last_agent_error}</small>}
         </div>
         <strong>{node.anytls_port}/{node.ss_port}</strong>
         <div className="actions">
           <button className="icon ghost-light" onClick={onPreview} title="预览 desired config"><Eye size={17} /></button>
+          <button className="ghost-light text-button" onClick={resetAgentToken} title="重置 Agent Token">Token</button>
+          <button className={node.enabled ? 'toggle on' : 'toggle'} onClick={toggleNode} title={node.enabled ? '暂停节点' : '恢复节点'}>{node.enabled ? '运行' : '暂停'}</button>
           <button className="icon ghost-light" onClick={() => setOpen((value) => !value)} title="编辑 Exit"><Edit3 size={17} /></button>
+          <button className="icon ghost-light danger" onClick={deleteNode} title="删除节点"><Trash2 size={17} /></button>
         </div>
       </div>
+      {error && !open && <div className="error slim">{error}</div>}
       {open && (
         <form className="node-form" onSubmit={save}>
           <div className="form-grid">
             <label>名称<input value={form.name} onChange={(e) => update('name', e.target.value)} required /></label>
             <label>Hostname<input value={form.hostname} onChange={(e) => update('hostname', e.target.value)} required /></label>
+            <label className="check"><input checked={form.anytls_enabled} onChange={(e) => update('anytls_enabled', e.target.checked)} type="checkbox" />启用 AnyTLS</label>
+            <label className="check"><input checked={form.ss_enabled} onChange={(e) => update('ss_enabled', e.target.checked)} type="checkbox" />启用 Shadowsocks</label>
             <label>AnyTLS 端口<input value={form.anytls_port} onChange={(e) => update('anytls_port', e.target.value)} type="number" min="1" max="65535" required /></label>
             <label>SS 端口<input value={form.ss_port} onChange={(e) => update('ss_port', e.target.value)} type="number" min="1" max="65535" required /></label>
+            <label className="wide">AnyTLS padding_scheme<textarea value={form.anytls_padding_scheme} onChange={(e) => update('anytls_padding_scheme', e.target.value)} placeholder={DEFAULT_ANYTLS_PADDING_SCHEME} rows={6} disabled={!form.anytls_enabled} /></label>
+            <label>SS method
+              <select value={form.ss_method} onChange={(e) => update('ss_method', e.target.value)} disabled={!form.ss_enabled}>
+                {SS_METHODS.map((method) => <option key={method} value={method}>{method}</option>)}
+              </select>
+            </label>
+            <label className="check"><input checked={form.relay_enabled} onChange={(e) => update('relay_enabled', e.target.checked)} type="checkbox" />订阅使用中转</label>
+            <label>中转 Host<input value={form.relay_host} onChange={(e) => update('relay_host', e.target.value)} placeholder="relay.example.com" disabled={!form.relay_enabled} /></label>
+            <label>中转 AnyTLS 端口<input value={form.relay_anytls_port} onChange={(e) => update('relay_anytls_port', e.target.value)} type="number" min="0" max="65535" disabled={!form.relay_enabled} /></label>
+            <label>中转 SS 端口<input value={form.relay_ss_port} onChange={(e) => update('relay_ss_port', e.target.value)} type="number" min="0" max="65535" disabled={!form.relay_enabled} /></label>
             <label>证书模式
               <select value={form.cert_mode} onChange={(e) => update('cert_mode', e.target.value)}>
                 <option value="manual">manual</option>
@@ -534,8 +625,16 @@ function exitFormFromNode(node: ExitNode) {
   return {
     name: node.name,
     hostname: node.hostname,
+    anytls_enabled: node.anytls_enabled ?? true,
+    ss_enabled: node.ss_enabled ?? true,
     anytls_port: String(node.anytls_port),
+    anytls_padding_scheme: node.anytls_padding_scheme || '',
     ss_port: String(node.ss_port),
+    ss_method: node.ss_method || 'aes-128-gcm',
+    relay_enabled: node.relay_enabled ?? false,
+    relay_host: node.relay_host || '',
+    relay_anytls_port: String(node.relay_anytls_port || ''),
+    relay_ss_port: String(node.relay_ss_port || ''),
     cert_mode: node.cert_mode || 'manual',
     cert_domain: node.cert_domain || '',
     certificate_path: node.certificate_path || '',
@@ -547,22 +646,55 @@ function exitFormFromNode(node: ExitNode) {
   };
 }
 
+function protocolSummary(node: ExitNode) {
+  const protocols = [];
+  if (node.anytls_enabled) protocols.push(`AnyTLS:${node.relay_enabled && node.relay_anytls_port ? node.relay_anytls_port : node.anytls_port}`);
+  if (node.ss_enabled) protocols.push(`SS:${node.relay_enabled && node.relay_ss_port ? node.relay_ss_port : node.ss_port} ${node.ss_method || 'aes-128-gcm'}`);
+  return protocols.join(' / ') || '未启用';
+}
+
+function versionSummary(node: ExitNode) {
+  const applied = node.applied_config_version || 0;
+  const desired = node.expected_config_version || 0;
+  return `applied v${applied} / desired v${desired}`;
+}
+
+function nodeStatus(node: ExitNode) {
+  const pending = (node.applied_config_version || 0) < (node.expected_config_version || 0);
+  if (!node.enabled) {
+    if (!node.last_heartbeat_at) return '暂停/离线';
+    if (node.last_agent_error) return '暂停错误';
+    return pending ? '暂停待应用' : '已暂停';
+  }
+  if (!node.last_heartbeat_at) return '离线';
+  if (node.last_agent_error) return '错误';
+  if (pending) return '待应用';
+  return '在线';
+}
+
 function SubscriptionsView({ users }: { users: User[] }) {
   const enabledUsers = users.filter((user) => user.enabled);
   const [userID, setUserID] = useState('');
   const selected = userID || enabledUsers[0]?.id || '';
   const [preview, setPreview] = useState('');
-  const url = useMemo(() => selected ? `${API}/subscriptions/${selected}/sing-box.json` : '', [selected]);
+  const selectedUser = useMemo(() => enabledUsers.find((user) => user.id === selected), [enabledUsers, selected]);
+  const subscriptionPath = selectedUser?.subscription_token ? `/sub/${selectedUser.subscription_token}` : '';
+  const url = useMemo(() => subscriptionPath ? `${window.location.origin}${subscriptionPath}` : '', [subscriptionPath]);
 
   async function loadPreview() {
-    if (!selected) return;
-    const data = await api<Record<string, unknown>>(`/subscriptions/${selected}/sing-box.json`);
+    if (!subscriptionPath) return;
+    const res = await fetch(subscriptionPath);
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(text || res.statusText);
+    }
+    const data = await res.json() as Record<string, unknown>;
     setPreview(JSON.stringify(data, null, 2));
   }
 
   useEffect(() => {
     loadPreview().catch((err) => setPreview(err instanceof Error ? err.message : 'request failed'));
-  }, [selected]);
+  }, [subscriptionPath]);
 
   return (
     <div className="stack">

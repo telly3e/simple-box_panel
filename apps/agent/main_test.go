@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -70,11 +71,15 @@ func TestAPIClientAddsBasicAuth(t *testing.T) {
 			http.Error(w, "missing auth", http.StatusUnauthorized)
 			return
 		}
+		if r.Header.Get("X-Sing-Panel-Agent-Token") != "agent-secret" {
+			http.Error(w, "missing token", http.StatusUnauthorized)
+			return
+		}
 		w.WriteHeader(http.StatusNoContent)
 	}))
 	t.Cleanup(server.Close)
 
-	client := apiClient{base: server.Client(), basicUser: "admin", basicPass: "secret"}
+	client := apiClient{base: server.Client(), basicUser: "admin", basicPass: "secret", agentToken: "agent-secret"}
 	req, err := http.NewRequest(http.MethodGet, server.URL, nil)
 	if err != nil {
 		t.Fatalf("new request: %v", err)
@@ -86,5 +91,28 @@ func TestAPIClientAddsBasicAuth(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusNoContent {
 		t.Fatalf("expected 204, got %d", resp.StatusCode)
+	}
+}
+
+func TestPostHeartbeatSendsAgentStatus(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/agent/exit_1/heartbeat" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		var status heartbeatStatus
+		if err := json.NewDecoder(r.Body).Decode(&status); err != nil {
+			t.Fatalf("decode heartbeat: %v", err)
+		}
+		if status.AppliedConfigVersion != 7 || status.LastError != "reload failed" {
+			t.Fatalf("unexpected heartbeat status: %#v", status)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(server.Close)
+
+	client := apiClient{base: server.Client()}
+	err := postHeartbeat(client, server.URL, "exit_1", heartbeatStatus{AppliedConfigVersion: 7, LastError: "reload failed"})
+	if err != nil {
+		t.Fatal(err)
 	}
 }

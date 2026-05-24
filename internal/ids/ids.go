@@ -21,3 +21,11 @@ func NewSecret(bytes int) string {
 	}
 	return base64.StdEncoding.EncodeToString(buf)
 }
+
+func NewToken(bytes int) string {
+	buf := make([]byte, bytes)
+	if _, err := rand.Read(buf); err != nil {
+		panic(err)
+	}
+	return base64.RawURLEncoding.EncodeToString(buf)
+}

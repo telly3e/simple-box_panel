@@ -1,6 +1,7 @@
 package api
 
 import (
+	"crypto/subtle"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -39,10 +40,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/users/", s.userByID)
 	s.mux.HandleFunc("/api/exit-nodes", s.exitNodes)
 	s.mux.HandleFunc("/api/exit-nodes/", s.exitNodeByID)
-	s.mux.HandleFunc("/api/entry-nodes", s.entryNodes)
-	s.mux.HandleFunc("/api/entry-nodes/", s.entryNodeByID)
-	s.mux.HandleFunc("/api/subscriptions/", s.subscription)
 	s.mux.HandleFunc("/api/agent/", s.agent)
+	s.mux.HandleFunc("/sub/", s.subscription)
 }
 
 func (s *Server) health(w http.ResponseWriter, r *http.Request) {
@@ -92,6 +91,12 @@ func (s *Server) userByID(w http.ResponseWriter, r *http.Request) {
 		}
 		user, err := s.store.PatchUser(r.Context(), id, patch)
 		respond(w, user, err)
+	case http.MethodDelete:
+		if err := s.store.DeleteUser(r.Context(), id); err != nil {
+			respond(w, map[string]string{}, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
 	default:
 		methodNotAllowed(w)
 	}
@@ -120,51 +125,23 @@ func (s *Server) exitNodeByID(w http.ResponseWriter, r *http.Request) {
 		notFound(w)
 		return
 	}
-	if r.Method != http.MethodPatch {
-		methodNotAllowed(w)
-		return
-	}
-	var patch store.ExitNodePatch
-	if !decode(w, r, &patch) {
-		return
-	}
-	node, err := s.store.PatchExitNode(r.Context(), id, patch)
-	respond(w, node, err)
-}
-
-func (s *Server) entryNodes(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
-	case http.MethodGet:
-		nodes, err := s.store.ListEntryNodes(r.Context())
-		respond(w, nodes, err)
-	case http.MethodPost:
-		var req domain.EntryNode
-		if !decode(w, r, &req) {
+	case http.MethodPatch:
+		var patch store.ExitNodePatch
+		if !decode(w, r, &patch) {
 			return
 		}
-		node, err := s.store.CreateEntryNode(r.Context(), req)
-		respondCreated(w, node, err)
+		node, err := s.store.PatchExitNode(r.Context(), id, patch)
+		respond(w, node, err)
+	case http.MethodDelete:
+		if err := s.store.DeleteExitNode(r.Context(), id); err != nil {
+			respond(w, map[string]string{}, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
 	default:
 		methodNotAllowed(w)
 	}
-}
-
-func (s *Server) entryNodeByID(w http.ResponseWriter, r *http.Request) {
-	id := strings.TrimPrefix(r.URL.Path, "/api/entry-nodes/")
-	if id == "" || strings.Contains(id, "/") {
-		notFound(w)
-		return
-	}
-	if r.Method != http.MethodPatch {
-		methodNotAllowed(w)
-		return
-	}
-	var patch store.EntryNodePatch
-	if !decode(w, r, &patch) {
-		return
-	}
-	node, err := s.store.PatchEntryNode(r.Context(), id, patch)
-	respond(w, node, err)
 }
 
 func (s *Server) subscription(w http.ResponseWriter, r *http.Request) {
@@ -172,27 +149,26 @@ func (s *Server) subscription(w http.ResponseWriter, r *http.Request) {
 		methodNotAllowed(w)
 		return
 	}
-	rest := strings.TrimPrefix(r.URL.Path, "/api/subscriptions/")
-	userID, ok := strings.CutSuffix(rest, "/sing-box.json")
-	if !ok || userID == "" {
+	token := strings.TrimPrefix(r.URL.Path, "/sub/")
+	if token == "" || strings.Contains(token, "/") {
 		notFound(w)
 		return
 	}
-	user, err := s.store.GetUser(r.Context(), userID)
+	user, err := s.store.GetUserBySubscriptionToken(r.Context(), token)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "user not found")
+		writeError(w, http.StatusNotFound, "subscription not found")
 		return
 	}
 	if !user.Active() {
 		writeError(w, http.StatusForbidden, "user is disabled or over quota")
 		return
 	}
-	entries, err := s.store.ListEntryNodes(r.Context())
+	nodes, err := s.store.ListExitNodes(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, configgen.GenerateClientSubscription(user, entries))
+	writeJSON(w, http.StatusOK, configgen.GenerateClientSubscription(user, nodes))
 }
 
 func (s *Server) agent(w http.ResponseWriter, r *http.Request) {
@@ -203,13 +179,17 @@ func (s *Server) agent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	nodeID, action := parts[0], parts[1]
+	node, err := s.store.GetExitNode(r.Context(), nodeID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "node not found")
+		return
+	}
+	if !validAgentToken(r, node.AgentToken) {
+		writeError(w, http.StatusUnauthorized, "invalid agent token")
+		return
+	}
 	switch {
 	case r.Method == http.MethodGet && action == "desired-config":
-		node, err := s.store.GetExitNode(r.Context(), nodeID)
-		if err != nil {
-			writeError(w, http.StatusNotFound, "node not found")
-			return
-		}
 		users, err := s.store.ActiveUsers(r.Context())
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
@@ -217,7 +197,11 @@ func (s *Server) agent(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusOK, configgen.GenerateServerConfig(node, users))
 	case r.Method == http.MethodPost && action == "heartbeat":
-		err := s.store.RecordHeartbeat(r.Context(), nodeID)
+		var req store.HeartbeatInput
+		if !decode(w, r, &req) {
+			return
+		}
+		err := s.store.RecordHeartbeat(r.Context(), nodeID, req)
 		respond(w, map[string]string{"status": "ok"}, err)
 	case r.Method == http.MethodPost && action == "traffic":
 		var req struct {
@@ -235,6 +219,23 @@ func (s *Server) agent(w http.ResponseWriter, r *http.Request) {
 	default:
 		methodNotAllowed(w)
 	}
+}
+
+func validAgentToken(r *http.Request, want string) bool {
+	if want == "" {
+		return false
+	}
+	got := r.Header.Get("X-Sing-Panel-Agent-Token")
+	if got == "" {
+		auth := r.Header.Get("Authorization")
+		if token, ok := strings.CutPrefix(auth, "Bearer "); ok {
+			got = strings.TrimSpace(token)
+		}
+	}
+	if got == "" || len(got) != len(want) {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(got), []byte(want)) == 1
 }
 
 func decode(w http.ResponseWriter, r *http.Request, dest any) bool {
@@ -287,8 +288,8 @@ func notFound(w http.ResponseWriter) {
 func cors(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Sing-Panel-Agent-Token")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
 			return

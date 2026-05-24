@@ -9,11 +9,13 @@ EnvironmentFile=/etc/sing-panel/agent.env
 ExecStart=/opt/sing-panel/sing-panel-agent \
   --api-url ${SING_PANEL_API_URL} \
   --node-id ${SING_PANEL_NODE_ID} \
+  --agent-token ${SING_PANEL_AGENT_TOKEN} \
   --runtime-dir ${SING_PANEL_AGENT_RUNTIME_DIR} \
   --interval ${SING_PANEL_AGENT_INTERVAL} \
   --stats-mode ${SING_PANEL_AGENT_STATS_MODE} \
   --check-config=${SING_PANEL_AGENT_CHECK_CONFIG} \
-  --sing-box-bin ${SING_PANEL_SING_BOX_BIN}
+  --sing-box-bin ${SING_PANEL_SING_BOX_BIN} \
+  --sing-box-service=${SING_PANEL_SING_BOX_SERVICE}
 Restart=always
 RestartSec=5s
 User=root

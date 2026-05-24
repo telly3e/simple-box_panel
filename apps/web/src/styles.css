@@ -16,7 +16,8 @@ body {
 
 button,
 input,
-select {
+select,
+textarea {
   font: inherit;
 }
 
@@ -26,6 +27,13 @@ label {
   color: #4c5a62;
   font-size: 13px;
   font-weight: 650;
+}
+
+label.check {
+  min-height: 40px;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  align-content: center;
 }
 
 main {
@@ -90,6 +98,15 @@ button:disabled {
   background: #eef3f0;
 }
 
+.ghost-light.danger {
+  color: #a53e1f;
+  border-color: #f2c7b7;
+}
+
+.ghost-light.danger:hover {
+  background: #fff0ea;
+}
+
 .refresh {
   margin-top: auto;
   justify-content: center;
@@ -128,6 +145,10 @@ p,
 small,
 .muted {
   color: #69757d;
+}
+
+.danger-text {
+  color: #a53e1f;
 }
 
 .error {
@@ -246,13 +267,38 @@ small,
 }
 
 input,
-select {
+select,
+textarea {
   min-height: 40px;
   border: 1px solid #cfd9d4;
   border-radius: 8px;
   background: #fff;
   padding: 0 11px;
   color: #172026;
+}
+
+textarea {
+  min-height: 140px;
+  padding: 10px 11px;
+  resize: vertical;
+}
+
+label.wide {
+  grid-column: 1 / -1;
+}
+
+input[type="checkbox"] {
+  min-height: auto;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+}
+
+input:disabled,
+textarea:disabled,
+select:disabled {
+  background: #f1f4f2;
+  color: #8b969b;
 }
 
 .primary {
